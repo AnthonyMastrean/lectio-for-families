@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- This file is generated automatically by the Update RSS Feed workflow.
+     Run `npm run generate` locally (requires Playwright) to refresh it. -->
+<rss version="2.0">
+  <channel>
+    <title>Lectio for Families</title>
+    <description>Daily family prayer audio from 24-7 Prayer — Lectio for Families</description>
+    <link>https://www.24-7prayer.com/lectioforfamilies/pray/</link>
+  </channel>
+</rss>
