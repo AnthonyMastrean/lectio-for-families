@@ -200,9 +200,9 @@ async function scrapeAudioUrls() {
  * referenceDate defaults to now and is used to anchor pubDates to the current week.
  */
 function buildEpisodes(urls, referenceDate = new Date()) {
-  // Filter to only downloads.24-7prayer.com audio files
+  // Filter to only MP3 audio files from downloads.24-7prayer.com
   const audioUrls = urls.filter((u) =>
-    /downloads\.24-7prayer\.com/i.test(u) || /\.mp3(\?|$)/i.test(u),
+    /downloads\.24-7prayer\.com/i.test(u) && /\.mp3(\?|$)/i.test(u),
   );
 
   if (audioUrls.length === 0) {
