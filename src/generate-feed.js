@@ -166,9 +166,9 @@ async function scrapeAudioUrls() {
       const found = new Set();
 
       document.querySelectorAll('audio').forEach((el) => {
-        if (el.src && el.src.includes('.mp3')) found.add(el.src);
+        if (el.src && /\.mp3(\?|$)/i.test(el.src)) found.add(el.src);
         el.querySelectorAll('source').forEach((s) => {
-          if (s.src && s.src.includes('.mp3')) found.add(s.src);
+          if (s.src && /\.mp3(\?|$)/i.test(s.src)) found.add(s.src);
         });
       });
 
