@@ -24,7 +24,8 @@ by the workflow — `feed.xml` is a build output and is not stored in the reposi
 3. Tap **Add content → Podcast / RSS feed**.
 4. Paste the feed URL above and tap **Add**.
 5. The app will populate one track per day of the current week (Monday–Sunday).
-6. Write the card and insert it into your Yoto player.
+6. Optionally upload [`icon.png`](icon.png) as the card icon (16×16 PNG, transparent background).
+7. Write the card and insert it into your Yoto player.
 
 Each Monday morning the feed updates automatically. Pull to refresh inside the Yoto app
 (or re-write the card) to pick up the new week's episodes.
