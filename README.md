@@ -8,15 +8,14 @@ built to connect to a [Yoto](https://yoto.io/) player MYO card.
 ## Feed URL
 
 ```
-https://raw.githubusercontent.com/AnthonyMastrean/lectio-for-families/main/feed.xml
+https://anthonymastrean.github.io/lectio-for-families/feed.xml
 ```
 
 The feed is refreshed every Monday morning (06:00 UTC) via a GitHub Actions workflow,
 and can also be triggered manually from the [Actions tab](../../actions/workflows/update-feed.yml).
 
-> **Where does `feed.xml` live?** It is committed directly to the `main` branch of this repository
-> and served via GitHub's raw content CDN. This gives a stable, permanent URL that never expires —
-> unlike workflow artifacts (90-day expiry) or releases (which require manual management).
+The feed is hosted on [GitHub Pages](https://pages.github.com/) and deployed automatically
+by the workflow — `feed.xml` is a build output and is not stored in the repository.
 
 ## Setting up a Yoto MYO card
 

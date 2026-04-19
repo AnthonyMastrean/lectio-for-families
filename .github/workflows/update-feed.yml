@@ -7,10 +7,12 @@ on:
   workflow_dispatch: # Allow manual runs from the Actions tab
 
 permissions:
-  contents: write
+  contents: read
+  pages: write
+  id-token: write
 
 jobs:
-  update-feed:
+  build:
     runs-on: ubuntu-latest
 
     steps:
@@ -32,11 +34,24 @@ jobs:
       - name: Generate RSS feed
         run: npm run generate
 
-      - name: Commit and push updated feed
+      - name: Prepare Pages artifact
         run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          git add feed.xml
-          git diff --staged --quiet \
-            || git commit -m "chore: update RSS feed [skip ci]"
-          git push
+          mkdir -p dist
+          cp feed.xml dist/feed.xml
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

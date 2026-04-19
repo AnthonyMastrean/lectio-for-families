@@ -119,7 +119,7 @@ function buildRSS(episodes) {
     <itunes:category text="Religion &amp; Spirituality">
       <itunes:category text="Christianity"/>
     </itunes:category>
-    <atom:link href="https://raw.githubusercontent.com/AnthonyMastrean/lectio-for-families/main/feed.xml" rel="self" type="application/rss+xml"/>
+    <atom:link href="https://anthonymastrean.github.io/lectio-for-families/feed.xml" rel="self" type="application/rss+xml"/>
 ${items}
   </channel>
 </rss>
