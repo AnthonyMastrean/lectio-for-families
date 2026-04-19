@@ -15,7 +15,7 @@ const FEED_TIMEOUT = 60_000;
  *   Y2-WK-51-Day-01-Phil.mp3
  */
 function parseEpisodeTitle(url) {
-  const filename = decodeURIComponent(url).split('/').pop().replace('.mp3', '');
+  const filename = decodeURIComponent(url).split('/').pop().replace(/\.mp3(\?.*)?$/i, '');
 
   // Extract day number (Day-01, Day-02 …)
   const dayMatch = filename.match(/Day[-_]0*(\d+)/i);
@@ -206,7 +206,9 @@ function buildEpisodes(urls, referenceDate = new Date()) {
   );
 
   if (audioUrls.length === 0) {
-    console.warn('No audio URLs found – the page may have changed structure.');
+    if (urls.length > 0) {
+      console.warn('No audio URLs found – the page may have changed structure.');
+    }
     return [];
   }
 

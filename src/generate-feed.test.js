@@ -219,7 +219,7 @@ describe('buildRSS', () => {
     const escapedUrl = escapeXml(urlWithSpecialChars);
 
     assert.ok(xml.includes(`<enclosure url="${escapedUrl}"`));
-    assert.ok(xml.includes(`<guid>${escapedUrl}</guid>`));
+    assert.ok(xml.includes(`<guid isPermaLink="false">${escapedUrl}</guid>`));
   });
   it('returns empty channel when episodes array is empty', () => {
     const xml = buildRSS([]);
