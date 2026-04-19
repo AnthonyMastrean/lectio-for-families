@@ -6,6 +6,9 @@ on:
     - cron: '0 6 * * 1'
   workflow_dispatch: # Allow manual runs from the Actions tab
 
+concurrency:
+  group: github-pages
+  cancel-in-progress: true
 permissions:
   contents: read
   pages: write
