@@ -3,7 +3,7 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { parseEpisodeTitle, buildRSS, buildEpisodes, escapeXml } = require('./generate-feed.js');
+const { parseEpisodeTitle, buildRSS, buildEpisodes, escapeXml, weekMonday, pubDateForDay } = require('./generate-feed.js');
 
 // ---------------------------------------------------------------------------
 // parseEpisodeTitle
@@ -57,6 +57,9 @@ describe('escapeXml', () => {
 // buildEpisodes
 // ---------------------------------------------------------------------------
 describe('buildEpisodes', () => {
+  // Use a fixed reference: Wednesday 2026-04-15 → week Mon 2026-04-13 … Sun 2026-04-19
+  const REF = new Date('2026-04-15T12:00:00Z');
+
   const sampleUrls = [
     'https://downloads.24-7prayer.com/Lectio%20for%20Families/Audio/2024-04-April/Week-15-Day-02-Chris.mp3',
     'https://downloads.24-7prayer.com/Lectio%20for%20Families/Audio/2024-04-April/Week-15-Day-01-Chris.mp3',
@@ -64,12 +67,12 @@ describe('buildEpisodes', () => {
   ];
 
   it('returns one episode per URL', () => {
-    const episodes = buildEpisodes(sampleUrls);
+    const episodes = buildEpisodes(sampleUrls, REF);
     assert.equal(episodes.length, 3);
   });
 
   it('sorts episodes by day number (keyed from URL, not title)', () => {
-    const episodes = buildEpisodes(sampleUrls);
+    const episodes = buildEpisodes(sampleUrls, REF);
     assert.equal(episodes[0].title, 'Week 15, Monday (Chris)');
     assert.equal(episodes[1].title, 'Week 15, Tuesday (Chris)');
     assert.equal(episodes[2].title, 'Week 15, Wednesday (Chris)');
@@ -80,17 +83,35 @@ describe('buildEpisodes', () => {
       (d) =>
         `https://downloads.24-7prayer.com/Lectio%20for%20Families/Audio/2024-04-April/Week-15-Day-0${d}-Chris.mp3`,
     );
-    const episodes = buildEpisodes(urls);
+    const episodes = buildEpisodes(urls, REF);
     const dayNames = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
     episodes.forEach((ep, i) => {
       assert.ok(ep.title.includes(dayNames[i]), `episode ${i} should be ${dayNames[i]}, got "${ep.title}"`);
     });
   });
 
+  it('sets pubDate to the correct calendar date for each day in the current week', () => {
+    const urls = [1, 2, 3, 4, 5, 6, 7].map(
+      (d) =>
+        `https://downloads.24-7prayer.com/Lectio%20for%20Families/Audio/2024-04-April/Week-15-Day-0${d}-Chris.mp3`,
+    );
+    const episodes = buildEpisodes(urls, REF);
+    // REF week: Mon Apr 13 … Sun Apr 19 2026
+    const expectedDates = [
+      '2026-04-13', '2026-04-14', '2026-04-15',
+      '2026-04-16', '2026-04-17', '2026-04-18', '2026-04-19',
+    ];
+    episodes.forEach((ep, i) => {
+      assert.ok(ep.pubDate instanceof Date, `episode ${i} pubDate should be a Date`);
+      const iso = ep.pubDate.toISOString().slice(0, 10);
+      assert.equal(iso, expectedDates[i], `episode ${i} date mismatch`);
+    });
+  });
+
   it('keeps 2024-dated URLs (content is reused across years)', () => {
     const oldYearUrl =
       'https://downloads.24-7prayer.com/Lectio%20for%20Families/Audio/2024-04-April/Week-15-Day-01-Chris.mp3';
-    const episodes = buildEpisodes([oldYearUrl]);
+    const episodes = buildEpisodes([oldYearUrl], REF);
     assert.equal(episodes.length, 1);
     assert.equal(episodes[0].url, oldYearUrl);
   });
@@ -101,14 +122,59 @@ describe('buildEpisodes', () => {
 
   it('filters out non-audio URLs', () => {
     const mixed = [...sampleUrls, 'https://example.com/page.html'];
-    const episodes = buildEpisodes(mixed);
+    const episodes = buildEpisodes(mixed, REF);
     assert.equal(episodes.length, 3);
   });
 });
 
 // ---------------------------------------------------------------------------
-// buildRSS
+// weekMonday
 // ---------------------------------------------------------------------------
+describe('weekMonday', () => {
+  it('returns the same Monday when referenceDate is already a Monday', () => {
+    const monday = new Date('2026-04-13T00:00:00Z'); // Monday
+    assert.equal(weekMonday(monday).toISOString().slice(0, 10), '2026-04-13');
+  });
+
+  it('returns the preceding Monday for a Wednesday', () => {
+    const wednesday = new Date('2026-04-15T12:00:00Z');
+    assert.equal(weekMonday(wednesday).toISOString().slice(0, 10), '2026-04-13');
+  });
+
+  it('returns the preceding Monday for a Sunday', () => {
+    const sunday = new Date('2026-04-19T23:59:59Z');
+    assert.equal(weekMonday(sunday).toISOString().slice(0, 10), '2026-04-13');
+  });
+
+  it('returns UTC midnight regardless of input time', () => {
+    const d = new Date('2026-04-16T18:30:00Z'); // Thursday afternoon UTC
+    const mon = weekMonday(d);
+    assert.equal(mon.getUTCHours(), 0);
+    assert.equal(mon.getUTCMinutes(), 0);
+    assert.equal(mon.toISOString().slice(0, 10), '2026-04-13');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// pubDateForDay
+// ---------------------------------------------------------------------------
+describe('pubDateForDay', () => {
+  // Anchor: Wednesday 2026-04-15 → week starts Mon 2026-04-13
+  const REF = new Date('2026-04-15T12:00:00Z');
+
+  it('Day 1 resolves to Monday', () => {
+    assert.equal(pubDateForDay(1, REF).toISOString().slice(0, 10), '2026-04-13');
+  });
+
+  it('Day 4 resolves to Thursday', () => {
+    assert.equal(pubDateForDay(4, REF).toISOString().slice(0, 10), '2026-04-16');
+  });
+
+  it('Day 7 resolves to Sunday', () => {
+    assert.equal(pubDateForDay(7, REF).toISOString().slice(0, 10), '2026-04-19');
+  });
+});
+
 describe('buildRSS', () => {
   const episodes = [
     {

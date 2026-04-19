@@ -41,6 +41,32 @@ function parseEpisodeTitle(url) {
 }
 
 /**
+ * Return the Monday (UTC midnight) of the week that contains referenceDate.
+ * The week is treated as Monday–Sunday.
+ */
+function weekMonday(referenceDate) {
+  const d = new Date(Date.UTC(
+    referenceDate.getUTCFullYear(),
+    referenceDate.getUTCMonth(),
+    referenceDate.getUTCDate(),
+  ));
+  // getUTCDay(): 0=Sun, 1=Mon, …, 6=Sat  →  days since last Monday
+  const daysToMonday = (d.getUTCDay() + 6) % 7;
+  d.setUTCDate(d.getUTCDate() - daysToMonday);
+  return d;
+}
+
+/**
+ * Return the real calendar date (UTC midnight) for a given day number
+ * (1=Monday … 7=Sunday) within the week that contains referenceDate.
+ */
+function pubDateForDay(dayNumber, referenceDate) {
+  const monday = weekMonday(referenceDate);
+  monday.setUTCDate(monday.getUTCDate() + dayNumber - 1);
+  return monday;
+}
+
+/**
  * Format a JavaScript Date object as RFC 2822 (required by RSS).
  */
 function toRFC2822(date) {
@@ -170,8 +196,9 @@ async function scrapeAudioUrls() {
 
 /**
  * Convert raw MP3 URLs into episode objects, sorted by day number.
+ * referenceDate defaults to now and is used to anchor pubDates to the current week.
  */
-function buildEpisodes(urls) {
+function buildEpisodes(urls, referenceDate = new Date()) {
   // Filter to only downloads.24-7prayer.com audio files
   const audioUrls = urls.filter((u) =>
     /downloads\.24-7prayer\.com/i.test(u) || /\.mp3(\?|$)/i.test(u),
@@ -182,12 +209,16 @@ function buildEpisodes(urls) {
     return [];
   }
 
-  const episodes = audioUrls.map((url) => ({
-    url,
-    title: parseEpisodeTitle(url),
-    pubDate: null,
-    description: 'Daily family prayer from 24-7 Prayer — Lectio for Families',
-  }));
+  const episodes = audioUrls.map((url) => {
+    const dayMatch = url.match(/Day[-_]0*(\d+)/i);
+    const dayNumber = dayMatch ? parseInt(dayMatch[1], 10) : null;
+    return {
+      url,
+      title: parseEpisodeTitle(url),
+      pubDate: dayNumber !== null ? pubDateForDay(dayNumber, referenceDate) : null,
+      description: 'Daily family prayer from 24-7 Prayer — Lectio for Families',
+    };
+  });
 
   // Sort by day number extracted from the URL (Day-01, Day-02 … Day-07)
   episodes.sort((a, b) => {
@@ -226,7 +257,7 @@ async function main() {
 }
 
 // Export utilities so they can be tested independently
-module.exports = { parseEpisodeTitle, buildRSS, buildEpisodes, escapeXml };
+module.exports = { parseEpisodeTitle, buildRSS, buildEpisodes, escapeXml, weekMonday, pubDateForDay };
 
 // Run if invoked directly
 if (require.main === module) {
