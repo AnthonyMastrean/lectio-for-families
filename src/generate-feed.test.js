@@ -209,6 +209,18 @@ describe('buildRSS', () => {
     assert.ok(xml.includes('&lt;desc&gt;'));
   });
 
+  it('escapes special characters in URLs used in enclosure and guid', () => {
+    const urlWithSpecialChars =
+      'https://example.com/audio/file.mp3?chapter=1&title="Faith & Hope"';
+    const epWithSpecialUrl = [
+      { ...episodes[0], url: urlWithSpecialChars },
+    ];
+    const xml = buildRSS(epWithSpecialUrl);
+    const escapedUrl = escapeXml(urlWithSpecialChars);
+
+    assert.ok(xml.includes(`<enclosure url="${escapedUrl}"`));
+    assert.ok(xml.includes(`<guid>${escapedUrl}</guid>`));
+  });
   it('returns empty channel when episodes array is empty', () => {
     const xml = buildRSS([]);
     assert.ok(xml.includes('<channel>'));
