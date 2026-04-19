@@ -95,12 +95,13 @@ function buildRSS(episodes) {
   const items = episodes.map((ep) => {
     const title = escapeXml(ep.title);
     const desc = escapeXml(ep.description || ep.title);
+    const url = escapeXml(ep.url);
     const pubDate = ep.pubDate ? toRFC2822(ep.pubDate) : buildDate;
     return `    <item>
       <title>${title}</title>
       <description>${desc}</description>
-      <enclosure url="${ep.url}" type="audio/mpeg" length="0"/>
-      <guid isPermaLink="false">${ep.url}</guid>
+      <enclosure url="${url}" type="audio/mpeg" length="0"/>
+      <guid isPermaLink="false">${url}</guid>
       <pubDate>${pubDate}</pubDate>
     </item>`;
   }).join('\n');
