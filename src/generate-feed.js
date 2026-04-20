@@ -7,6 +7,10 @@ const path = require('path');
 const PRAY_URL = 'https://www.24-7prayer.com/lectioforfamilies/pray/';
 const FEED_FILE = path.join(__dirname, '..', 'feed.xml');
 const FEED_TIMEOUT = 60_000;
+// Extra settling time after networkidle before reading the DOM
+const MAIN_PAGE_SETTLE_MS = 2_000;
+const DEVOTIONAL_PAGE_SETTLE_MS = 1_000;
+const FALLBACK_SETTLE_MS = 3_000;
 
 /**
  * Parse episode metadata from an MP3 filename or URL path.
@@ -128,7 +132,45 @@ ${items}
 }
 
 /**
+ * Extract the MP3 URL from an individual Lectio for Families devotional page.
+ * The site uses a presto-player whose real src is set via an inline jQuery script.
+ */
+async function extractMp3FromDevotionalPage(page) {
+  // Primary: inline script that overrides the presto-player src via jQuery
+  //   $('#presto-player-1').attr('src', 'https://downloads.24-7prayer.com/...mp3');
+  const fromScript = await page.evaluate(() => {
+    for (const script of document.querySelectorAll('script:not([src])')) {
+      // Match the inline jQuery call that sets the real audio source, e.g.:
+      //   $('#presto-player-1').attr('src', 'https://downloads.24-7prayer.com/...mp3')
+      const m = script.textContent.match(
+        /#presto-player[^']*'\s*\)\s*\.attr\s*\(\s*'src'\s*,\s*'([^']*\.mp3[^']*)'/i,
+      );
+      if (m) return m[1];
+    }
+    return null;
+  });
+  if (fromScript) return fromScript;
+
+  // Fallback: presto-player src attribute (may already reflect the jQuery value)
+  const fromAttr = await page.evaluate(() => {
+    const player = document.querySelector('[id^="presto-player"]');
+    if (player) {
+      const src = player.getAttribute('src') || '';
+      if (/\.mp3(\?|$)/i.test(src)) return src;
+    }
+    return null;
+  });
+  return fromAttr;
+}
+
+/**
  * Use Playwright to scrape audio MP3 URLs from the Lectio for Families pray page.
+ *
+ * The site now hosts each day's audio on a separate /lff-devotional/ page rather
+ * than embedding all players on the main /pray/ page.  We therefore:
+ *   1. Visit the main page and collect all .lectio_item devotional links.
+ *   2. Visit each individual page and extract the MP3 URL.
+ *
  * Returns an array of absolute URL strings.
  */
 async function scrapeAudioUrls() {
@@ -140,54 +182,74 @@ async function scrapeAudioUrls() {
 
   const captured = new Set();
 
-  // Intercept all network requests – catch MP3 loads triggered by the player
+  // Keep network-level interception as a bonus catch for any MP3 request made
+  // automatically by the player (e.g. prefetch / preload).
   page.on('request', (request) => {
     const url = request.url();
-    if (/\.mp3(\?|$)/i.test(url)) {
-      captured.add(url);
-    }
+    if (/\.mp3(\?|$)/i.test(url)) captured.add(url);
   });
-
-  page.on('response', async (response) => {
+  page.on('response', (response) => {
     const url = response.url();
-    if (/\.mp3(\?|$)/i.test(url)) {
-      captured.add(url);
-    }
+    if (/\.mp3(\?|$)/i.test(url)) captured.add(url);
   });
 
   try {
+    // ── Step 1: collect individual devotional page links ──────────────────────
     await page.goto(PRAY_URL, { waitUntil: 'networkidle', timeout: FEED_TIMEOUT });
+    await page.waitForTimeout(MAIN_PAGE_SETTLE_MS);
 
-    // Wait a little longer for lazy-loaded players
-    await page.waitForTimeout(3000);
-
-    // DOM search: audio elements, source elements, and <a> / <button> links
-    const domUrls = await page.evaluate(() => {
-      const found = new Set();
-
-      document.querySelectorAll('audio').forEach((el) => {
-        if (el.src && /\.mp3(\?|$)/i.test(el.src)) found.add(el.src);
-        el.querySelectorAll('source').forEach((s) => {
-          if (s.src && /\.mp3(\?|$)/i.test(s.src)) found.add(s.src);
-        });
+    const devotionalLinks = await page.evaluate(() => {
+      const links = [];
+      document.querySelectorAll('a.lectio_item[href]').forEach((el) => {
+        if (/\/lff-devotional\//i.test(el.href)) links.push(el.href);
       });
-
-      document.querySelectorAll('a[href], source[src], [data-url], [data-src]').forEach((el) => {
-        const candidate =
-          el.getAttribute('href') ||
-          el.getAttribute('src') ||
-          el.getAttribute('data-url') ||
-          el.getAttribute('data-src') ||
-          '';
-        if (/\.mp3(\?|$)/i.test(candidate)) {
-          found.add(new URL(candidate, location.href).href);
-        }
-      });
-
-      return [...found];
+      return [...new Set(links)];
     });
 
-    domUrls.forEach((u) => captured.add(u));
+    // ── Step 2: visit each devotional page and grab the MP3 URL ───────────────
+    if (devotionalLinks.length > 0) {
+      for (const link of devotionalLinks) {
+        try {
+          await page.goto(link, { waitUntil: 'networkidle', timeout: FEED_TIMEOUT });
+          await page.waitForTimeout(DEVOTIONAL_PAGE_SETTLE_MS);
+
+          const mp3Url = await extractMp3FromDevotionalPage(page);
+          if (mp3Url) captured.add(mp3Url);
+        } catch (err) {
+          console.warn(`Skipping ${link}: ${err.message}`);
+        }
+      }
+    } else {
+      // ── Fallback: old behaviour – look for MP3 links directly on the main page
+      await page.waitForTimeout(FALLBACK_SETTLE_MS);
+
+      const domUrls = await page.evaluate(() => {
+        const found = new Set();
+
+        document.querySelectorAll('audio').forEach((el) => {
+          if (el.src && /\.mp3(\?|$)/i.test(el.src)) found.add(el.src);
+          el.querySelectorAll('source').forEach((s) => {
+            if (s.src && /\.mp3(\?|$)/i.test(s.src)) found.add(s.src);
+          });
+        });
+
+        document.querySelectorAll('a[href], source[src], [data-url], [data-src]').forEach((el) => {
+          const candidate =
+            el.getAttribute('href') ||
+            el.getAttribute('src') ||
+            el.getAttribute('data-url') ||
+            el.getAttribute('data-src') ||
+            '';
+          if (/\.mp3(\?|$)/i.test(candidate)) {
+            found.add(new URL(candidate, location.href).href);
+          }
+        });
+
+        return [...found];
+      });
+
+      domUrls.forEach((u) => captured.add(u));
+    }
   } finally {
     await browser.close();
   }
