@@ -1,0 +1,25 @@
+{
+  "name": "lectio-for-families",
+  "version": "1.0.0",
+  "description": "An RSS feed for Lectio for Families by 24-7 Prayer to connect to a Yoto player MYO card",
+  "main": "index.js",
+  "scripts": {
+    "generate": "node src/generate-feed.js",
+    "test": "node --test src/generate-feed.test.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AnthonyMastrean/lectio-for-families.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/AnthonyMastrean/lectio-for-families/issues"
+  },
+  "homepage": "https://github.com/AnthonyMastrean/lectio-for-families#readme",
+  "dependencies": {
+    "playwright": "^1.59.1"
+  }
+}
