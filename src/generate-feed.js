@@ -7,10 +7,6 @@ const path = require('path');
 const PRAY_URL = 'https://www.24-7prayer.com/lectioforfamilies/pray/';
 const FEED_FILE = path.join(__dirname, '..', 'feed.xml');
 const FEED_TIMEOUT = 60_000;
-// Extra settling time after networkidle before reading the DOM
-const MAIN_PAGE_SETTLE_MS = 2_000;
-const DEVOTIONAL_PAGE_SETTLE_MS = 1_000;
-const FALLBACK_SETTLE_MS = 3_000;
 
 /**
  * Parse episode metadata from an MP3 filename or URL path.
@@ -217,7 +213,8 @@ async function scrapeAudioUrls() {
   try {
     // ── Step 1: collect individual devotional page links ──────────────────────
     await page.goto(PRAY_URL, { waitUntil: 'networkidle', timeout: FEED_TIMEOUT });
-    await page.waitForTimeout(MAIN_PAGE_SETTLE_MS);
+    // Wait for devotional links to be rendered; continue silently if they never appear
+    await page.waitForSelector('a.lectio_item[href]', { timeout: FEED_TIMEOUT }).catch(() => {});
 
     const devotionalLinks = await page.evaluate(() => {
       const links = [];
@@ -232,7 +229,8 @@ async function scrapeAudioUrls() {
       for (const link of devotionalLinks) {
         try {
           await page.goto(link, { waitUntil: 'networkidle', timeout: FEED_TIMEOUT });
-          await page.waitForTimeout(DEVOTIONAL_PAGE_SETTLE_MS);
+          // Wait for the audio player element to be present; continue silently if absent
+          await page.waitForSelector('[id^="presto-player"]', { timeout: FEED_TIMEOUT }).catch(() => {});
 
           const mp3Url = await extractMp3FromDevotionalPage(page);
           if (mp3Url) captured.add(mp3Url);
@@ -242,7 +240,7 @@ async function scrapeAudioUrls() {
       }
     } else {
       // ── Fallback: old behaviour – look for MP3 links directly on the main page
-      await page.waitForTimeout(FALLBACK_SETTLE_MS);
+      await page.waitForSelector('audio, [data-src], [data-url]', { timeout: FEED_TIMEOUT }).catch(() => {});
 
       const domUrls = await page.evaluate(() => {
         const found = new Set();
