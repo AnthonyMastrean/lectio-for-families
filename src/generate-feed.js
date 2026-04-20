@@ -131,36 +131,57 @@ ${items}
 `;
 }
 
+function resolveMp3Url(url, baseUrl) {
+  if (!url) return null;
+  try {
+    return new URL(url, baseUrl).toString();
+  } catch {
+    return url;
+  }
+}
+
+/**
+ * Extract the MP3 URL from devotional page HTML.
+ * Supports the inline jQuery presto-player override and a src-attribute fallback.
+ */
+function extractMp3FromHtml(html, baseUrl) {
+  if (!html) return null;
+
+  // Primary: inline script that overrides the presto-player src via jQuery, e.g.:
+  //   $('#presto-player-1').attr('src', 'https://downloads.24-7prayer.com/...mp3');
+  // Also supports common quote variants.
+  const inlineScriptRegex = /<script\b[^>]*>([\s\S]*?)<\/script>/gi;
+  const scriptSrcRegex =
+    /\$\(\s*(["'`])#presto-player[^"'`]*\1\s*\)\s*\.attr\s*\(\s*(["'`])src\2\s*,\s*(["'`])([^"'`]*\.mp3(?:\?[^"'`]*)?)\3/i;
+  let scriptMatch;
+  while ((scriptMatch = inlineScriptRegex.exec(html)) !== null) {
+    const srcMatch = scriptMatch[1].match(scriptSrcRegex);
+    if (srcMatch) return resolveMp3Url(srcMatch[4], baseUrl);
+  }
+
+  // Fallback: presto-player src attribute (may already reflect the jQuery value).
+  const attrPatterns = [
+    /<[^>]*\bid=(["'])presto-player[^"'<>]*\1[^>]*\bsrc=(["'])([^"']*\.mp3(?:\?[^"']*)?)\2[^>]*>/i,
+    /<[^>]*\bsrc=(["'])([^"']*\.mp3(?:\?[^"']*)?)\1[^>]*\bid=(["'])presto-player[^"'<>]*\3[^>]*>/i,
+  ];
+  for (const pattern of attrPatterns) {
+    const match = html.match(pattern);
+    if (match) {
+      const src = match[3] || match[2];
+      if (src) return resolveMp3Url(src, baseUrl);
+    }
+  }
+
+  return null;
+}
+
 /**
  * Extract the MP3 URL from an individual Lectio for Families devotional page.
  * The site uses a presto-player whose real src is set via an inline jQuery script.
  */
 async function extractMp3FromDevotionalPage(page) {
-  // Primary: inline script that overrides the presto-player src via jQuery
-  //   $('#presto-player-1').attr('src', 'https://downloads.24-7prayer.com/...mp3');
-  const fromScript = await page.evaluate(() => {
-    for (const script of document.querySelectorAll('script:not([src])')) {
-      // Match the inline jQuery call that sets the real audio source, e.g.:
-      //   $('#presto-player-1').attr('src', 'https://downloads.24-7prayer.com/...mp3')
-      const m = script.textContent.match(
-        /#presto-player[^']*'\s*\)\s*\.attr\s*\(\s*'src'\s*,\s*'([^']*\.mp3[^']*)'/i,
-      );
-      if (m) return m[1];
-    }
-    return null;
-  });
-  if (fromScript) return fromScript;
-
-  // Fallback: presto-player src attribute (may already reflect the jQuery value)
-  const fromAttr = await page.evaluate(() => {
-    const player = document.querySelector('[id^="presto-player"]');
-    if (player) {
-      const src = player.getAttribute('src') || '';
-      if (/\.mp3(\?|$)/i.test(src)) return src;
-    }
-    return null;
-  });
-  return fromAttr;
+  const html = await page.content();
+  return extractMp3FromHtml(html, page.url());
 }
 
 /**
