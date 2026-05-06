@@ -87,6 +87,44 @@ function escapeXml(str) {
 }
 
 /**
+ * Unescape XML special characters (reverse of escapeXml).
+ * &amp; must be replaced last to avoid double-unescaping (e.g. &amp;lt; → &lt;, not <).
+ */
+function unescapeXml(str) {
+  return String(str)
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, '&');
+}
+
+/**
+ * Parse episode objects from an existing RSS 2.0 feed XML string.
+ * Returns an array of episode objects compatible with buildEpisodes output.
+ */
+function parseExistingFeed(xml) {
+  if (!xml) return [];
+  const episodes = [];
+  const itemRegex = /<item>([\s\S]*?)<\/item>/g;
+  let itemMatch;
+  while ((itemMatch = itemRegex.exec(xml)) !== null) {
+    const block = itemMatch[1];
+    const titleMatch = block.match(/<title>([\s\S]*?)<\/title>/);
+    const descMatch = block.match(/<description>([\s\S]*?)<\/description>/);
+    const guidMatch = block.match(/<guid[^>]*>([\s\S]*?)<\/guid>/);
+    const pubDateMatch = block.match(/<pubDate>([\s\S]*?)<\/pubDate>/);
+    if (!guidMatch) continue;
+    const url = unescapeXml(guidMatch[1].trim());
+    const title = titleMatch ? unescapeXml(titleMatch[1].trim()) : url;
+    const description = descMatch ? unescapeXml(descMatch[1].trim()) : '';
+    const pubDate = pubDateMatch ? new Date(pubDateMatch[1].trim()) : null;
+    episodes.push({ url, title, pubDate, description });
+  }
+  return episodes;
+}
+
+/**
  * Build an RSS 2.0 feed string from an array of episode objects.
  * Each episode: { url, title, pubDate (Date), description }
  */
@@ -341,13 +379,40 @@ async function main() {
     process.exit(1);
   }
 
-  const xml = buildRSS(episodes);
+  // Load and merge existing feed so that previous weeks' episodes are retained
+  let existingEpisodes = [];
+  if (fs.existsSync(FEED_FILE)) {
+    try {
+      const existingXml = fs.readFileSync(FEED_FILE, 'utf8');
+      existingEpisodes = parseExistingFeed(existingXml);
+      console.log(`Loaded ${existingEpisodes.length} existing episode(s) from ${FEED_FILE}.`);
+    } catch (err) {
+      console.warn(`Could not read existing feed: ${err.message}`);
+    }
+  }
+
+  // New episodes take precedence; existing episodes not in the new batch are retained
+  const newUrls = new Set(episodes.map((ep) => ep.url));
+  const mergedEpisodes = [
+    ...episodes,
+    ...existingEpisodes.filter((ep) => !newUrls.has(ep.url)),
+  ];
+
+  // Sort by pubDate descending (newest first); episodes with no pubDate go last
+  mergedEpisodes.sort((a, b) => {
+    if (!a.pubDate && !b.pubDate) return 0;
+    if (!a.pubDate) return 1;
+    if (!b.pubDate) return -1;
+    return b.pubDate - a.pubDate;
+  });
+
+  const xml = buildRSS(mergedEpisodes);
   fs.writeFileSync(FEED_FILE, xml, 'utf8');
-  console.log(`Wrote ${FEED_FILE} with ${episodes.length} episode(s).`);
+  console.log(`Wrote ${FEED_FILE} with ${mergedEpisodes.length} episode(s) (${episodes.length} new, ${existingEpisodes.length} previously existing).`);
 }
 
 // Export utilities so they can be tested independently
-module.exports = { parseEpisodeTitle, buildRSS, buildEpisodes, escapeXml, weekMonday, pubDateForDay };
+module.exports = { parseEpisodeTitle, buildRSS, buildEpisodes, escapeXml, unescapeXml, weekMonday, pubDateForDay, parseExistingFeed };
 
 // Run if invoked directly
 if (require.main === module) {
