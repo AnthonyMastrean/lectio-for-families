@@ -3,7 +3,7 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { parseEpisodeTitle, buildRSS, buildEpisodes, escapeXml, weekMonday, pubDateForDay } = require('./generate-feed.js');
+const { parseEpisodeTitle, buildRSS, buildEpisodes, escapeXml, unescapeXml, weekMonday, pubDateForDay, parseExistingFeed } = require('./generate-feed.js');
 
 // ---------------------------------------------------------------------------
 // parseEpisodeTitle
@@ -225,5 +225,101 @@ describe('buildRSS', () => {
     const xml = buildRSS([]);
     assert.ok(xml.includes('<channel>'));
     assert.ok(!xml.includes('<item>'));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// unescapeXml
+// ---------------------------------------------------------------------------
+describe('unescapeXml', () => {
+  it('unescapes all five standard XML entities', () => {
+    assert.equal(unescapeXml('a &amp; b'), 'a & b');
+    assert.equal(unescapeXml('&lt;tag&gt;'), '<tag>');
+    assert.equal(unescapeXml('&quot;quoted&quot;'), '"quoted"');
+    assert.equal(unescapeXml('&apos;it&apos;s&apos;'), "'it's'");
+  });
+
+  it('is the inverse of escapeXml for round-trip', () => {
+    const original = 'A & B <test> "quoted" \'value\'';
+    assert.equal(unescapeXml(escapeXml(original)), original);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseExistingFeed
+// ---------------------------------------------------------------------------
+describe('parseExistingFeed', () => {
+  const sampleXml = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Lectio for Families</title>
+    <item>
+      <title>Week 15, Monday (Chris)</title>
+      <description>Daily family prayer from 24-7 Prayer — Lectio for Families</description>
+      <enclosure url="https://downloads.24-7prayer.com/Lectio%20for%20Families/Audio/2024-04-April/Week-15-Day-01-Chris.mp3" type="audio/mpeg" length="0"/>
+      <guid isPermaLink="false">https://downloads.24-7prayer.com/Lectio%20for%20Families/Audio/2024-04-April/Week-15-Day-01-Chris.mp3</guid>
+      <pubDate>Mon, 08 Apr 2024 00:00:00 GMT</pubDate>
+    </item>
+    <item>
+      <title>Week 15, Tuesday (Chris)</title>
+      <description>Daily family prayer from 24-7 Prayer — Lectio for Families</description>
+      <enclosure url="https://downloads.24-7prayer.com/Lectio%20for%20Families/Audio/2024-04-April/Week-15-Day-02-Chris.mp3" type="audio/mpeg" length="0"/>
+      <guid isPermaLink="false">https://downloads.24-7prayer.com/Lectio%20for%20Families/Audio/2024-04-April/Week-15-Day-02-Chris.mp3</guid>
+      <pubDate>Tue, 09 Apr 2024 00:00:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>`;
+
+  it('returns one episode per <item> in the feed', () => {
+    const episodes = parseExistingFeed(sampleXml);
+    assert.equal(episodes.length, 2);
+  });
+
+  it('extracts the url from the <guid> element', () => {
+    const episodes = parseExistingFeed(sampleXml);
+    assert.equal(
+      episodes[0].url,
+      'https://downloads.24-7prayer.com/Lectio%20for%20Families/Audio/2024-04-April/Week-15-Day-01-Chris.mp3',
+    );
+  });
+
+  it('extracts the title', () => {
+    const episodes = parseExistingFeed(sampleXml);
+    assert.equal(episodes[0].title, 'Week 15, Monday (Chris)');
+  });
+
+  it('extracts the pubDate as a Date object', () => {
+    const episodes = parseExistingFeed(sampleXml);
+    assert.ok(episodes[0].pubDate instanceof Date);
+    assert.equal(episodes[0].pubDate.toISOString().slice(0, 10), '2024-04-08');
+  });
+
+  it('unescapes XML entities in title and description', () => {
+    const xmlWithEntities = `<rss><channel>
+      <item>
+        <title>Faith &amp; Hope</title>
+        <description>&lt;desc&gt;</description>
+        <guid isPermaLink="false">https://example.com/audio.mp3</guid>
+        <pubDate>Mon, 08 Apr 2024 00:00:00 GMT</pubDate>
+      </item>
+    </channel></rss>`;
+    const episodes = parseExistingFeed(xmlWithEntities);
+    assert.equal(episodes[0].title, 'Faith & Hope');
+    assert.equal(episodes[0].description, '<desc>');
+  });
+
+  it('returns empty array for empty or null input', () => {
+    assert.deepEqual(parseExistingFeed(''), []);
+    assert.deepEqual(parseExistingFeed(null), []);
+  });
+
+  it('skips items without a <guid> element', () => {
+    const xmlNoGuid = `<rss><channel>
+      <item>
+        <title>No guid here</title>
+        <pubDate>Mon, 08 Apr 2024 00:00:00 GMT</pubDate>
+      </item>
+    </channel></rss>`;
+    assert.deepEqual(parseExistingFeed(xmlNoGuid), []);
   });
 });
