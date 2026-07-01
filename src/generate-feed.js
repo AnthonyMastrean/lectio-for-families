@@ -8,6 +8,7 @@ const PRAY_URL = 'https://www.24-7prayer.com/lectioforfamilies/pray/';
 const FEED_FILE = path.join(__dirname, '..', 'feed.xml');
 const FEED_TIMEOUT = 60_000;
 const PAGE_SETTLE_TIMEOUT = 5_000;
+const DEFAULT_MP3_BITRATE_BPS = 128_000;
 
 /**
  * Parse episode metadata from an MP3 filename or URL path.
@@ -114,14 +115,145 @@ function parseExistingFeed(xml) {
     const descMatch = block.match(/<description>([\s\S]*?)<\/description>/);
     const guidMatch = block.match(/<guid[^>]*>([\s\S]*?)<\/guid>/);
     const pubDateMatch = block.match(/<pubDate>([\s\S]*?)<\/pubDate>/);
+    const durationMatch = block.match(/<itunes:duration>([\s\S]*?)<\/itunes:duration>/);
+    const enclosureLengthMatch = block.match(/<enclosure[^>]*\blength="(\d+)"[^>]*\/?>/i);
     if (!guidMatch) continue;
     const url = unescapeXml(guidMatch[1].trim());
     const title = titleMatch ? unescapeXml(titleMatch[1].trim()) : url;
     const description = descMatch ? unescapeXml(descMatch[1].trim()) : '';
     const pubDate = pubDateMatch ? new Date(pubDateMatch[1].trim()) : null;
-    episodes.push({ url, title, pubDate, description });
+    const duration = durationMatch ? unescapeXml(durationMatch[1].trim()) : null;
+    const enclosureLength = enclosureLengthMatch ? parseInt(enclosureLengthMatch[1], 10) : null;
+    episodes.push({ url, title, pubDate, description, duration, enclosureLength });
   }
   return episodes;
+}
+
+function parseDurationToSeconds(value) {
+  if (value === null || value === undefined) return null;
+  const input = String(value).trim();
+  if (!input) return null;
+
+  if (/^\d+(\.\d+)?$/.test(input)) {
+    return Math.max(1, Math.round(Number(input)));
+  }
+
+  const parts = input.split(':');
+  if (parts.length === 2 && parts.every((p) => /^\d+$/.test(p))) {
+    const minutes = Number(parts[0]);
+    const seconds = Number(parts[1]);
+    if (seconds < 60) return (minutes * 60) + seconds;
+  }
+
+  if (parts.length === 3 && parts.every((p) => /^\d+$/.test(p))) {
+    const hours = Number(parts[0]);
+    const minutes = Number(parts[1]);
+    const seconds = Number(parts[2]);
+    if (minutes < 60 && seconds < 60) return (hours * 3600) + (minutes * 60) + seconds;
+  }
+
+  return null;
+}
+
+function formatDuration(totalSeconds) {
+  const seconds = Math.max(1, Math.floor(totalSeconds));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remainingSeconds = seconds % 60;
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(remainingSeconds).padStart(2, '0')}`;
+}
+
+function estimateDurationSeconds(enclosureLength) {
+  return Math.max(1, Math.round((enclosureLength * 8) / DEFAULT_MP3_BITRATE_BPS));
+}
+
+function parseLengthFromHeaders(headers) {
+  if (!headers) return null;
+  const contentLength = headers.get('content-length');
+  if (contentLength && /^\d+$/.test(contentLength) && parseInt(contentLength, 10) > 0) {
+    return parseInt(contentLength, 10);
+  }
+
+  const contentRange = headers.get('content-range');
+  if (contentRange) {
+    const match = contentRange.match(/\/(\d+)$/);
+    if (match && parseInt(match[1], 10) > 0) return parseInt(match[1], 10);
+  }
+
+  return null;
+}
+
+async function resolveAudioMetadata(url, fetchImpl = globalThis.fetch) {
+  let enclosureLength = null;
+  let durationSeconds = null;
+
+  try {
+    const headResponse = await fetchImpl(url, { method: 'HEAD', redirect: 'follow' });
+    if (headResponse && headResponse.ok) {
+      enclosureLength = parseLengthFromHeaders(headResponse.headers);
+      durationSeconds =
+        parseDurationToSeconds(headResponse.headers.get('content-duration'))
+        || parseDurationToSeconds(headResponse.headers.get('x-content-duration'))
+        || parseDurationToSeconds(headResponse.headers.get('x-duration'))
+        || parseDurationToSeconds(headResponse.headers.get('x-amz-meta-duration'));
+    }
+  } catch {
+    // Ignore and continue to GET range fallback.
+  }
+
+  if (!enclosureLength) {
+    try {
+      const rangeResponse = await fetchImpl(url, {
+        method: 'GET',
+        headers: { Range: 'bytes=0-0' },
+        redirect: 'follow',
+      });
+      if (rangeResponse && rangeResponse.ok) {
+        enclosureLength = parseLengthFromHeaders(rangeResponse.headers);
+      }
+    } catch {
+      // Ignore and report unresolved metadata below.
+    }
+  }
+
+  if (!enclosureLength) return null;
+  if (!durationSeconds) durationSeconds = estimateDurationSeconds(enclosureLength);
+
+  return {
+    enclosureLength,
+    duration: formatDuration(durationSeconds),
+  };
+}
+
+function validateEpisode(ep) {
+  if (!ep || typeof ep.title !== 'string' || ep.title.trim() === '') return 'missing title';
+  if (!ep.url || typeof ep.url !== 'string' || !/^https?:\/\//i.test(ep.url)) return 'invalid enclosure URL';
+  if (!Number.isInteger(ep.enclosureLength) || ep.enclosureLength <= 0) return 'invalid enclosure length';
+  if (!(ep.pubDate instanceof Date) || Number.isNaN(ep.pubDate.getTime())) return 'invalid pubDate';
+  if (!ep.duration || !/^\d{2,}:\d{2}:\d{2}$/.test(ep.duration)) return 'invalid duration';
+
+  const [hours, minutes, seconds] = ep.duration.split(':').map((part) => parseInt(part, 10));
+  if (Number.isNaN(hours) || Number.isNaN(minutes) || Number.isNaN(seconds) || minutes >= 60 || seconds >= 60) {
+    return 'invalid duration';
+  }
+
+  return null;
+}
+
+function partitionValidEpisodes(episodes) {
+  const validEpisodes = [];
+  const skippedEpisodes = [];
+
+  episodes.forEach((ep) => {
+    const reason = validateEpisode(ep);
+    if (reason) {
+      skippedEpisodes.push({ episode: ep, reason });
+      return;
+    }
+    validEpisodes.push(ep);
+  });
+
+  return { validEpisodes, skippedEpisodes };
 }
 
 /**
@@ -136,12 +268,14 @@ function buildRSS(episodes) {
     const desc = escapeXml(ep.description || ep.title);
     const url = escapeXml(ep.url);
     const pubDate = ep.pubDate ? toRFC2822(ep.pubDate) : buildDate;
+    const duration = escapeXml(ep.duration);
     return `    <item>
       <title>${title}</title>
       <description>${desc}</description>
-      <enclosure url="${url}" type="audio/mpeg" length="0"/>
+      <enclosure url="${url}" type="audio/mpeg" length="${ep.enclosureLength}"/>
       <guid isPermaLink="false">${url}</guid>
       <pubDate>${pubDate}</pubDate>
+      <itunes:duration>${duration}</itunes:duration>
     </item>`;
   }).join('\n');
 
@@ -372,7 +506,12 @@ async function main() {
   console.log(`Found ${urls.length} MP3 URL(s):`);
   urls.forEach((u) => console.log('  ', u));
 
-  const episodes = buildEpisodes(urls);
+  const scrapedEpisodes = buildEpisodes(urls);
+  const episodes = [];
+  for (const ep of scrapedEpisodes) {
+    const metadata = await resolveAudioMetadata(ep.url);
+    episodes.push({ ...ep, ...metadata });
+  }
 
   if (episodes.length === 0) {
     console.error('No episodes to write – aborting.');
@@ -406,13 +545,36 @@ async function main() {
     return b.pubDate - a.pubDate;
   });
 
-  const xml = buildRSS(mergedEpisodes);
+  const { validEpisodes, skippedEpisodes } = partitionValidEpisodes(mergedEpisodes);
+  skippedEpisodes.forEach(({ episode, reason }) => {
+    console.warn(`Skipping feed item (${episode.url || episode.title || 'unknown'}): ${reason}`);
+  });
+
+  if (validEpisodes.length === 0) {
+    console.error('No valid episodes to write – aborting.');
+    process.exit(1);
+  }
+
+  const xml = buildRSS(validEpisodes);
   fs.writeFileSync(FEED_FILE, xml, 'utf8');
-  console.log(`Wrote ${FEED_FILE} with ${mergedEpisodes.length} episode(s) (${episodes.length} new, ${existingEpisodes.length} previously existing).`);
+  console.log(`Wrote ${FEED_FILE}: total=${mergedEpisodes.length}, written=${validEpisodes.length}, skipped=${skippedEpisodes.length} (${episodes.length} new, ${existingEpisodes.length} previously existing).`);
 }
 
 // Export utilities so they can be tested independently
-module.exports = { parseEpisodeTitle, buildRSS, buildEpisodes, escapeXml, unescapeXml, weekMonday, pubDateForDay, parseExistingFeed };
+module.exports = {
+  parseEpisodeTitle,
+  buildRSS,
+  buildEpisodes,
+  escapeXml,
+  unescapeXml,
+  weekMonday,
+  pubDateForDay,
+  parseExistingFeed,
+  parseDurationToSeconds,
+  formatDuration,
+  resolveAudioMetadata,
+  partitionValidEpisodes,
+};
 
 // Run if invoked directly
 if (require.main === module) {

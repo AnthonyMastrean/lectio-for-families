@@ -3,7 +3,20 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { parseEpisodeTitle, buildRSS, buildEpisodes, escapeXml, unescapeXml, weekMonday, pubDateForDay, parseExistingFeed } = require('./generate-feed.js');
+const {
+  parseEpisodeTitle,
+  buildRSS,
+  buildEpisodes,
+  escapeXml,
+  unescapeXml,
+  weekMonday,
+  pubDateForDay,
+  parseExistingFeed,
+  parseDurationToSeconds,
+  formatDuration,
+  resolveAudioMetadata,
+  partitionValidEpisodes,
+} = require('./generate-feed.js');
 
 // ---------------------------------------------------------------------------
 // parseEpisodeTitle
@@ -182,6 +195,8 @@ describe('buildRSS', () => {
       title: 'Week 15, Monday (Chris)',
       pubDate: new Date('2024-04-08T00:00:00Z'),
       description: 'Daily family prayer from 24-7 Prayer — Lectio for Families',
+      enclosureLength: 4_250_000,
+      duration: '00:04:25',
     },
   ];
 
@@ -198,6 +213,8 @@ describe('buildRSS', () => {
     assert.ok(xml.includes('<title>Week 15, Monday (Chris)</title>'));
     assert.ok(xml.includes('<enclosure url="'));
     assert.ok(xml.includes('type="audio/mpeg"'));
+    assert.ok(xml.includes('length="4250000"'));
+    assert.ok(xml.includes('<itunes:duration>00:04:25</itunes:duration>'));
   });
 
   it('escapes special characters in titles', () => {
@@ -294,6 +311,22 @@ describe('parseExistingFeed', () => {
     assert.equal(episodes[0].pubDate.toISOString().slice(0, 10), '2024-04-08');
   });
 
+  it('extracts enclosure length and duration when present', () => {
+    const xmlWithMetadata = `<rss><channel>
+      <item>
+        <title>Week 15, Monday (Chris)</title>
+        <description>Daily family prayer</description>
+        <enclosure url="https://example.com/audio.mp3" type="audio/mpeg" length="12345"/>
+        <guid isPermaLink="false">https://example.com/audio.mp3</guid>
+        <pubDate>Mon, 08 Apr 2024 00:00:00 GMT</pubDate>
+        <itunes:duration>00:03:45</itunes:duration>
+      </item>
+    </channel></rss>`;
+    const episodes = parseExistingFeed(xmlWithMetadata);
+    assert.equal(episodes[0].enclosureLength, 12345);
+    assert.equal(episodes[0].duration, '00:03:45');
+  });
+
   it('unescapes XML entities in title and description', () => {
     const xmlWithEntities = `<rss><channel>
       <item>
@@ -321,5 +354,73 @@ describe('parseExistingFeed', () => {
       </item>
     </channel></rss>`;
     assert.deepEqual(parseExistingFeed(xmlNoGuid), []);
+  });
+});
+
+describe('duration helpers', () => {
+  it('parses numeric, mm:ss, and hh:mm:ss durations', () => {
+    assert.equal(parseDurationToSeconds('120'), 120);
+    assert.equal(parseDurationToSeconds('05:30'), 330);
+    assert.equal(parseDurationToSeconds('01:05:30'), 3930);
+  });
+
+  it('formats seconds as HH:MM:SS', () => {
+    assert.equal(formatDuration(1), '00:00:01');
+    assert.equal(formatDuration(3930), '01:05:30');
+  });
+});
+
+describe('resolveAudioMetadata', () => {
+  it('uses HEAD metadata when available', async () => {
+    const fetchMock = async () => ({
+      ok: true,
+      headers: new Headers({
+        'content-length': '6400000',
+        'x-amz-meta-duration': '300',
+      }),
+    });
+    const metadata = await resolveAudioMetadata('https://example.com/audio.mp3', fetchMock);
+    assert.deepEqual(metadata, { enclosureLength: 6400000, duration: '00:05:00' });
+  });
+
+  it('falls back to range GET and estimates duration when duration header is missing', async () => {
+    let callCount = 0;
+    const fetchMock = async (_url, options = {}) => {
+      callCount += 1;
+      if (options.method === 'HEAD') {
+        return { ok: true, headers: new Headers() };
+      }
+      return {
+        ok: true,
+        headers: new Headers({
+          'content-range': 'bytes 0-0/3200000',
+        }),
+      };
+    };
+
+    const metadata = await resolveAudioMetadata('https://example.com/audio.mp3', fetchMock);
+    assert.equal(callCount, 2);
+    assert.deepEqual(metadata, { enclosureLength: 3200000, duration: '00:03:20' });
+  });
+});
+
+describe('partitionValidEpisodes', () => {
+  it('keeps valid episodes and skips invalid metadata', () => {
+    const base = {
+      title: 'Week 15, Monday (Chris)',
+      url: 'https://example.com/audio.mp3',
+      pubDate: new Date('2024-04-08T00:00:00Z'),
+      description: 'Daily family prayer',
+    };
+    const { validEpisodes, skippedEpisodes } = partitionValidEpisodes([
+      { ...base, enclosureLength: 12345, duration: '00:03:45' },
+      { ...base, enclosureLength: 0, duration: '00:03:45' },
+      { ...base, enclosureLength: 12345, duration: '' },
+    ]);
+
+    assert.equal(validEpisodes.length, 1);
+    assert.equal(skippedEpisodes.length, 2);
+    assert.equal(skippedEpisodes[0].reason, 'invalid enclosure length');
+    assert.equal(skippedEpisodes[1].reason, 'invalid duration');
   });
 });
