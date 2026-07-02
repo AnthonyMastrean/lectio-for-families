@@ -225,6 +225,28 @@ async function resolveAudioMetadata(url, fetchImpl = globalThis.fetch) {
   };
 }
 
+async function normalizeEpisodeMetadata(ep, fetchImpl = globalThis.fetch) {
+  const normalized = { ...ep };
+
+  const parsedDuration = parseDurationToSeconds(normalized.duration);
+  if (parsedDuration) {
+    normalized.duration = formatDuration(parsedDuration);
+  }
+
+  const needsLength = !Number.isInteger(normalized.enclosureLength) || normalized.enclosureLength <= 0;
+  const needsDuration = !parseDurationToSeconds(normalized.duration);
+
+  if (!needsLength && !needsDuration) return normalized;
+
+  const resolved = await resolveAudioMetadata(normalized.url, fetchImpl);
+  if (!resolved) return normalized;
+
+  if (needsLength) normalized.enclosureLength = resolved.enclosureLength;
+  if (needsDuration) normalized.duration = resolved.duration;
+
+  return normalized;
+}
+
 function validateEpisode(ep) {
   if (!ep || typeof ep.title !== 'string' || ep.title.trim() === '') return 'missing title';
   if (!ep.url || typeof ep.url !== 'string' || !/^https?:\/\//i.test(ep.url)) return 'invalid enclosure URL';
@@ -545,7 +567,12 @@ async function main() {
     return b.pubDate - a.pubDate;
   });
 
-  const { validEpisodes, skippedEpisodes } = partitionValidEpisodes(mergedEpisodes);
+  const normalizedEpisodes = [];
+  for (const ep of mergedEpisodes) {
+    normalizedEpisodes.push(await normalizeEpisodeMetadata(ep));
+  }
+
+  const { validEpisodes, skippedEpisodes } = partitionValidEpisodes(normalizedEpisodes);
   skippedEpisodes.forEach(({ episode, reason }) => {
     console.warn(`Skipping feed item (${episode.url || episode.title || 'unknown'}): ${reason}`);
   });
@@ -557,7 +584,7 @@ async function main() {
 
   const xml = buildRSS(validEpisodes);
   fs.writeFileSync(FEED_FILE, xml, 'utf8');
-  console.log(`Wrote ${FEED_FILE}: total=${mergedEpisodes.length}, written=${validEpisodes.length}, skipped=${skippedEpisodes.length} (${episodes.length} new, ${existingEpisodes.length} previously existing).`);
+  console.log(`Wrote ${FEED_FILE}: total=${normalizedEpisodes.length}, written=${validEpisodes.length}, skipped=${skippedEpisodes.length} (${episodes.length} new, ${existingEpisodes.length} previously existing).`);
 }
 
 // Export utilities so they can be tested independently
@@ -573,6 +600,7 @@ module.exports = {
   parseDurationToSeconds,
   formatDuration,
   resolveAudioMetadata,
+  normalizeEpisodeMetadata,
   partitionValidEpisodes,
 };
 

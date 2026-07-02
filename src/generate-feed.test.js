@@ -15,6 +15,7 @@ const {
   parseDurationToSeconds,
   formatDuration,
   resolveAudioMetadata,
+  normalizeEpisodeMetadata,
   partitionValidEpisodes,
 } = require('./generate-feed.js');
 
@@ -401,6 +402,50 @@ describe('resolveAudioMetadata', () => {
     const metadata = await resolveAudioMetadata('https://example.com/audio.mp3', fetchMock);
     assert.equal(callCount, 2);
     assert.deepEqual(metadata, { enclosureLength: 3200000, duration: '00:03:20' });
+  });
+});
+
+describe('normalizeEpisodeMetadata', () => {
+  it('backfills legacy episodes with missing metadata', async () => {
+    const fetchMock = async () => ({
+      ok: true,
+      headers: new Headers({
+        'content-length': '6400000',
+        'x-amz-meta-duration': '300',
+      }),
+    });
+    const episode = {
+      title: 'Week 15, Monday (Chris)',
+      url: 'https://example.com/audio.mp3',
+      pubDate: new Date('2024-04-08T00:00:00Z'),
+      description: 'Daily family prayer',
+      enclosureLength: 0,
+      duration: null,
+    };
+
+    const normalized = await normalizeEpisodeMetadata(episode, fetchMock);
+    assert.equal(normalized.enclosureLength, 6400000);
+    assert.equal(normalized.duration, '00:05:00');
+  });
+
+  it('normalizes parseable duration without network call', async () => {
+    let called = false;
+    const fetchMock = async () => {
+      called = true;
+      return null;
+    };
+    const episode = {
+      title: 'Week 15, Tuesday (Chris)',
+      url: 'https://example.com/audio.mp3',
+      pubDate: new Date('2024-04-09T00:00:00Z'),
+      description: 'Daily family prayer',
+      enclosureLength: 12345,
+      duration: '05:30',
+    };
+
+    const normalized = await normalizeEpisodeMetadata(episode, fetchMock);
+    assert.equal(normalized.duration, '00:05:30');
+    assert.equal(called, false);
   });
 });
 
