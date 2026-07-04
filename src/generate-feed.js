@@ -532,7 +532,7 @@ async function main() {
   const episodes = [];
   for (const ep of scrapedEpisodes) {
     const metadata = await resolveAudioMetadata(ep.url);
-    episodes.push({ ...ep, ...metadata });
+    episodes.push({ ...ep, ...(metadata || {}) });
   }
 
   if (episodes.length === 0) {
